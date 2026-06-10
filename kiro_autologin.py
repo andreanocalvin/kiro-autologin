@@ -313,13 +313,12 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
         google_ok = await _handle_google_login(page, email, password)
         if not google_ok:
             result["error"] = "google_login_failed"
-            if HEADLESS:
-                ss_path = f"debug_kiro_{email.split('@')[0]}.png"
-                try:
-                    await page.screenshot(path=ss_path)
-                    dbg(f"[{email}] Saved debug screenshot: {ss_path}")
-                except Exception:
-                    pass
+            ss_path = f"debug_kiro_{email.split('@')[0]}.png"
+            try:
+                await page.screenshot(path=ss_path)
+                log(f"[{email}] Saved debug screenshot: {ss_path}", "WARN")
+            except Exception:
+                pass
             await browser.close()
             return result
 
@@ -339,12 +338,22 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
             except Exception:
                 pass
 
-            # Handle any post-login consent/welcome pages
-            if i > 5:
-                try:
-                    await _try_dismiss_consent(page, email)
-                except Exception:
-                    pass
+            # Handle Kiro "Sign in to..." consent page + Google consent
+            try:
+                dismissed = await _try_dismiss_consent(page, email)
+                if dismissed:
+                    dbg(f"[{email}] Consent page dismissed at iter {i}")
+            except Exception:
+                pass
+
+        # Take screenshot if no auth code captured
+        if not result["auth_code"]:
+            ss_path = f"debug_kiro_{email.split('@')[0]}_nocapture.png"
+            try:
+                await page.screenshot(path=ss_path)
+                log(f"[{email}] No auth code — saved screenshot: {ss_path}", "WARN")
+            except Exception:
+                pass
 
         await browser.close()
 
@@ -464,7 +473,7 @@ async def _handle_google_login(page, email: str, password: str) -> bool:
 
 
 async def _try_dismiss_consent(page, email: str) -> bool:
-    """Try to dismiss Google consent/speedbump/welcome pages. Returns True if dismissed."""
+    """Try to dismiss Google/Kiro consent/speedbump/welcome pages. Returns True if dismissed."""
     # Method 1: Known element IDs/names (language-agnostic)
     known_selectors = [
         '#confirm',
@@ -476,6 +485,12 @@ async def _try_dismiss_consent(page, email: str) -> bool:
         'button[name="accept"]',
         '#gaplustosNext button',
         '#gaplustosNext button[jsname="LgbsSe"]',
+        # Kiro-specific consent buttons
+        'button:has-text("Continue")',
+        'button:has-text("Sign in")',
+        'button:has-text("Allow")',
+        '[data-testid="continue-button"]',
+        '[data-testid="sign-in-button"]',
     ]
 
     for sel in known_selectors:
@@ -494,7 +509,7 @@ async def _try_dismiss_consent(page, email: str) -> bool:
             const consentTexts = [
                 'i understand', 'i agree', 'agree', 'allow', 'continue', 'next',
                 'approve', 'confirm', 'accept', 'got it', 'accept all', 'done',
-                'i accept', 'accept & continue',
+                'i accept', 'accept & continue', 'sign in', 'authorize',
                 'saya mengerti', 'saya setuju', 'setuju', 'lanjutkan', 'terima',
                 'izinkan', 'konfirmasi', 'mengerti',
             ];

@@ -5,3 +5,5 @@
 # john@gmail.com:mypassword123
 # jane.doe@gmail.com:anotherpass
 
+DomenicRivers@gihuil.my.id:qwertyui
+TasiaSchiller@gihuil.my.id:qwertyui
