@@ -1,0 +1,7 @@
+# Kiro Auto-Login — Accounts File
+# Format: email:password (one per line)
+# Lines starting with # are ignored
+
+# Example:
+# johndoe@gmail.com:mypassword123
+# jane.doe@yahoo.com:secretpass
