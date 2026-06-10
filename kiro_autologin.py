@@ -889,6 +889,7 @@ def parse_args():
     parser.add_argument("--concurrent", "-c", type=int, default=1, help="Concurrent browser sessions")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug output")
     parser.add_argument("--no-skip-existing", action="store_true", help="Re-login existing accounts")
+    parser.add_argument("--interactive", "-i", action="store_true", help="Interactive prompts before running")
     return parser.parse_args()
 
 
@@ -942,6 +943,42 @@ async def async_main():
         sys.exit(1)
 
     log(f"Accounts loaded: {len(accounts)}")
+
+    # ── Interactive mode ──
+    if args.interactive:
+        print()
+        print("  ---------------------------------------------------")
+        for email, _ in accounts:
+            print(f"    {email}")
+        print("  ---------------------------------------------------")
+        print()
+
+        # Ask headless
+        h = input("  Headless mode? (browser invisible) [y/N]: ").strip().lower()
+        if h in ("y", "yes"):
+            args.headless = True
+            HEADLESS = True
+
+        # Ask concurrency
+        c = input("  Concurrent browsers (1-5) [1]: ").strip()
+        if c.isdigit() and 1 <= int(c) <= 5:
+            args.concurrent = int(c)
+
+        print()
+        print("  +--------------------------------------+")
+        print(f"  |  Accounts:   {len(accounts)}")
+        print(f"  |  Browser:    {'Headless' if HEADLESS else 'Visible'}")
+        print(f"  |  Concurrent: {args.concurrent}")
+        print(f"  |  Save to:    {'Test (no DB)' if args.test else '9router DB'}")
+        print("  +--------------------------------------+")
+        print()
+
+        confirm = input("  Start login? [Y/n]: ").strip().lower()
+        if confirm in ("n", "no"):
+            print("\n  Cancelled.\n")
+            sys.exit(0)
+
+        print()
 
     # ── Skip existing accounts ──
     if not args.test and not args.no_skip_existing:

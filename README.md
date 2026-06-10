@@ -117,7 +117,7 @@ email3@workspace.com:password3
 ```
 usage: kiro_autologin.py [-h] [--batch FILE] [--headless]
                           [--concurrent N] [--test] [--debug]
-                          [--no-skip-existing]
+                          [--interactive] [--no-skip-existing]
                           [accounts ...]
 
 positional arguments:
@@ -129,6 +129,7 @@ options:
   -c, --concurrent N    Concurrent browser sessions (1-5, default: 1)
   -t, --test            Test mode (don't save to DB, print JSON)
   -d, --debug           Debug output
+  -i, --interactive     Interactive prompts before running
   --no-skip-existing    Re-login even if account exists in 9router
 ```
 
