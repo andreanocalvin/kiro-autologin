@@ -248,6 +248,8 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
+                # Auto-accept custom protocol redirects (kiro://) without "Open app?" dialog
+                "--auto-accept-external-protocol-requests",
                 # Block "X wants to access your local network" prompt
                 "--disable-features=PrivateNetworkAccessRespectPreflightResults,"
                     "PrivateNetworkAccessSendPreflights,"
@@ -260,9 +262,100 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         )
-        await ctx.add_init_script(
-            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-        )
+        # Anti-detection + intercept kiro:// at JS level (before browser shows "Open app?" dialog)
+        await ctx.add_init_script("""
+            // Hide webdriver
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+            // Intercept kiro:// navigation at JS level
+            window.__kiro_code = null;
+            window.__kiro_url = null;
+
+            function extractKiroCode(url) {
+                if (!url || !url.startsWith('kiro://')) return null;
+                try {
+                    const params = new URL(url).searchParams;
+                    return params.get('code') || null;
+                } catch(e) { return null; }
+            }
+
+            // Override window.open
+            const _origOpen = window.open;
+            window.open = function(url, ...args) {
+                const code = extractKiroCode(url);
+                if (code) {
+                    window.__kiro_code = code;
+                    window.__kiro_url = url;
+                    return null;  // block navigation
+                }
+                return _origOpen.call(this, url, ...args);
+            };
+
+            // Override location changes via defineProperty
+            const _origLocation = window.location;
+            let _locProxy = new Proxy(_origLocation, {
+                set(target, prop, value) {
+                    const code = extractKiroCode(value);
+                    if (code) {
+                        window.__kiro_code = code;
+                        window.__kiro_url = value;
+                        return true;  // block navigation
+                    }
+                    target[prop] = value;
+                    return true;
+                }
+            });
+
+            // Override common navigation methods
+            const _origAssign = window.location.assign;
+            const _origReplace = window.location.replace;
+            window.location.assign = function(url) {
+                const code = extractKiroCode(url);
+                if (code) { window.__kiro_code = code; window.__kiro_url = url; return; }
+                return _origAssign.call(window.location, url);
+            };
+            window.location.replace = function(url) {
+                const code = extractKiroCode(url);
+                if (code) { window.__kiro_code = code; window.__kiro_url = url; return; }
+                return _origReplace.call(window.location, url);
+            };
+
+            // Intercept beforeunload to catch kiro:// redirects
+            window.addEventListener('beforeunload', function(e) {
+                // Check if any pending navigation is to kiro://
+                const links = document.querySelectorAll('a[href^="kiro://"]');
+                links.forEach(link => {
+                    const code = extractKiroCode(link.href);
+                    if (code) {
+                        window.__kiro_code = code;
+                        window.__kiro_url = link.href;
+                    }
+                });
+            });
+
+            // Intercept meta refresh and JS redirects
+            const _observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                    m.addedNodes.forEach(function(node) {
+                        if (node.tagName === 'META' && node.httpEquiv === 'refresh') {
+                            const content = node.content || '';
+                            const urlMatch = content.match(/url=(.+)/i);
+                            if (urlMatch) {
+                                const code = extractKiroCode(urlMatch[1]);
+                                if (code) {
+                                    window.__kiro_code = code;
+                                    window.__kiro_url = urlMatch[1];
+                                    node.remove();  // prevent redirect
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+            _observer.observe(document.documentElement || document.body, {
+                childList: true, subtree: true
+            });
+        """)
 
         page = await ctx.new_page()
 
@@ -334,6 +427,16 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
                 code = extract_code_from_kiro_url(current_url)
                 if code:
                     result["auth_code"] = code
+                    break
+            except Exception:
+                pass
+
+            # Check JS-injected kiro:// code (window.__kiro_code)
+            try:
+                js_code = await page.evaluate("window.__kiro_code")
+                if js_code:
+                    log(f"[{email}] Captured code via JS injection: {js_code[:20]}...")
+                    result["auth_code"] = js_code
                     break
             except Exception:
                 pass
@@ -680,12 +783,36 @@ async def process_account(email: str, password: str, test_only: bool = False) ->
     if test_only:
         elapsed = time.time() - start_time
         log(f"[{email}] Test mode — skipping DB save ({elapsed:.1f}s)", "OK")
+
+        # Simulate what would be saved
+        from datetime import timezone as _tz
+        _now = datetime.now(timezone.utc)
+        _expires_at = (_now + timedelta(seconds=expires_in)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        simulated_data = {
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "expiresAt": _expires_at,
+            "expiresIn": expires_in,
+            "testStatus": "active",
+            "providerSpecificData": {
+                "profileArn": profile_arn,
+                "authMethod": "google",
+                "provider": "Google",
+            },
+        }
+        log(f"[{email}] ── Simulated DB save ──")
+        log(f"[{email}] Table: providerConnections")
+        log(f"[{email}] Provider: kiro | AuthType: oauth")
+        log(f"[{email}] Data JSON:")
+        print(json.dumps(simulated_data, indent=2))
+        log(f"[{email}] ────────────────────────")
+
         return {
             "success": True,
             "email": email,
             "access_token": access_token[:20] + "...",
             "refresh_token": refresh_token[:20] + "...",
-            "profile_arn": profile_arn[:40] + "..." if profile_arn else "",
+            "profile_arn": (profile_arn[:40] + "...") if profile_arn else "",
             "expires_in": expires_in,
             "elapsed": elapsed,
         }
