@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Debug artifacts
+debug_kiro_*.png
+*.log
+
+# Accounts file (contains credentials)
+accounts.txt
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Tokens (never commit)
+kiro_tokens.json
