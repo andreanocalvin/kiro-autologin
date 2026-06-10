@@ -94,7 +94,6 @@ kiro-autologin/
 ├── kiro_autologin.py       ← Script utama
 ├── setup.bat               ← Auto-installer (Python + Playwright)
 ├── run-batch.bat           ← Interactive batch launcher (double-click)
-├── run-test.bat            ← Test single account (double-click)
 ├── accounts.txt            ← Akun kamu (jangan di-commit!)
 ├── accounts.txt.example    ← Template (safe to commit)
 ├── requirements.txt        ← Python dependencies
