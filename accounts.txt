@@ -1,0 +1,7 @@
+# Kiro accounts — one email:password per line
+# Lines starting with # are ignored
+#
+# Example:
+# john@gmail.com:mypassword123
+# jane.doe@gmail.com:anotherpass
+
