@@ -217,8 +217,20 @@ _PRIVATE_PREFIXES = (
 )
 
 async def _block_private(route):
-    """Block requests to private/local network IPs."""
+    """Block requests to private/local network IPs AND intercept kiro:// redirects."""
     url = route.request.url
+
+    # Intercept kiro:// custom protocol — capture code and abort
+    if url.startswith("kiro://"):
+        code = extract_code_from_kiro_url(url)
+        if code:
+            try:
+                # Store code via page.evaluate since we can't access result dict here
+                await route.abort()
+            except Exception:
+                pass
+            return
+
     try:
         host = urlparse(url).hostname or ""
     except Exception:
@@ -362,28 +374,13 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
         # Auto-dismiss all browser dialogs
         page.on("dialog", lambda d: asyncio.ensure_future(_auto_dismiss(d, email)))
 
-        # Block private network requests
-        await page.route("**/*", _block_private)
-
         page.set_default_timeout(30000)
 
-        # ── Intercept kiro:// redirect via route handler ──
-        async def route_handler(route):
-            request_url = route.request.url
-            code = extract_code_from_kiro_url(request_url)
-            if code:
-                dbg(f"[{email}] Captured kiro:// redirect, code={code[:20]}...")
-                result["auth_code"] = code
-                try:
-                    await route.abort()
-                except Exception:
-                    pass
-                return
-            await route.continue_()
+        # NOTE: Do NOT use page.route() — it breaks Google login (per kiro-autoupgrade skill)
+        # Private network blocking handled by Chrome args (--disable-features=PrivateNetworkAccess*)
+        # kiro:// interception handled by JS injection + response listener + URL polling
 
-        await page.route("kiro://**", route_handler)
-
-        # ── Also listen for response headers as fallback ──
+        # ── Listen for response headers (catch kiro:// redirect) ──
         def on_response(response):
             try:
                 location = response.headers.get("location", "")
@@ -403,7 +400,7 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
             log(f"[{email}] Navigation error: {e}", "WARN")
 
         # ── Drive Google SSO login ──
-        google_ok = await _handle_google_login(page, email, password)
+        google_ok = await _handle_google_login(page, email, password, result)
         if not google_ok:
             result["error"] = "google_login_failed"
             ss_path = f"debug_kiro_{email.split('@')[0]}.png"
@@ -466,7 +463,7 @@ async def automate_login(email: str, password: str, code_verifier: str, code_cha
     return result
 
 
-async def _handle_google_login(page, email: str, password: str) -> bool:
+async def _handle_google_login(page, email: str, password: str, result: dict = None) -> bool:
     """
     Auto-fill Google login pages (email → password → consent).
     Returns True if Google login completed successfully.
@@ -474,9 +471,15 @@ async def _handle_google_login(page, email: str, password: str) -> bool:
     log(f"[{email}] Waiting for Google login pages...")
 
     email_submitted = False
+    password_submitted = False
 
     for i in range(90):
         await asyncio.sleep(1)
+
+        # Early return if auth code already captured (by response listener or JS injection)
+        if result and result.get("auth_code"):
+            log(f"[{email}] Auth code already captured — exiting Google login loop", "OK")
+            return True
 
         try:
             current_url = page.url
@@ -492,37 +495,39 @@ async def _handle_google_login(page, email: str, password: str) -> bool:
                 return True
 
         # ── Password step (check BEFORE email to avoid re-fill bug) ──
-        try:
-            passwd_input = page.locator('input[name="Passwd"]').first
-            if await passwd_input.is_visible(timeout=1500):
-                log(f"[{email}] Password step detected")
-                await passwd_input.click()
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Backspace")
-                await passwd_input.press_sequentially(password, delay=60)
-                await asyncio.sleep(0.3)
+        if not password_submitted:
+            try:
+                passwd_input = page.locator('input[name="Passwd"]').first
+                if await passwd_input.is_visible(timeout=1500):
+                    log(f"[{email}] Password step detected")
+                    await passwd_input.click()
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    await passwd_input.press_sequentially(password, delay=60)
+                    await asyncio.sleep(0.3)
 
-                # Click Next button
-                try:
-                    next_btn = page.locator('#passwordNext button').first
-                    await next_btn.click(force=True, timeout=5000)
-                except Exception:
+                    # Click Next button
                     try:
-                        await page.evaluate(
-                            'document.querySelector("#passwordNext").querySelector("button").click()'
-                        )
+                        next_btn = page.locator('#passwordNext button').first
+                        await next_btn.click(force=True, timeout=5000)
                     except Exception:
-                        await page.keyboard.press("Enter")
+                        try:
+                            await page.evaluate(
+                                'document.querySelector("#passwordNext").querySelector("button").click()'
+                            )
+                        except Exception:
+                            await page.keyboard.press("Enter")
 
-                email_submitted = True
-                log(f"[{email}] Password submitted")
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=10000)
-                except Exception:
-                    pass
-                continue
-        except Exception:
-            pass
+                    password_submitted = True
+                    email_submitted = True
+                    log(f"[{email}] Password submitted")
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    continue
+            except Exception:
+                pass
 
         # ── Email step ──
         if not email_submitted:
@@ -610,7 +615,7 @@ async def _try_dismiss_consent(page, email: str) -> bool:
     try:
         clicked = await page.evaluate("""() => {
             const consentTexts = [
-                'i understand', 'i agree', 'agree', 'allow', 'continue', 'next',
+                'i understand', 'i agree', 'agree', 'allow', 'continue',
                 'approve', 'confirm', 'accept', 'got it', 'accept all', 'done',
                 'i accept', 'accept & continue', 'sign in', 'authorize',
                 'saya mengerti', 'saya setuju', 'setuju', 'lanjutkan', 'terima',
